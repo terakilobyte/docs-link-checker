@@ -17,8 +17,10 @@ import (
 )
 
 type Check struct {
-	Source string `json:"source"`
-	Result string `json:"result"`
+	Line    int    `json:"line"`
+	Source  string `json:"source"`
+	Message string `json:"message"`
+	Ok      bool   `json:"ok"`
 }
 
 const (
@@ -33,73 +35,73 @@ func SplitOrgAndRepo(url string) []string {
 	return strings.Split(strings.TrimPrefix(url, GIT), "/")
 }
 
-func CheckGitHub(line int, org, repo string, ch chan<- string, gh *github.Client, wg *sync.WaitGroup) {
-	to := make(chan string, 1)
+func CheckGitHub(line int, org, repo string, ch chan<- Check, gh *github.Client, wg *sync.WaitGroup) {
+	to := make(chan Check, 1)
+	defer wg.Done()
+	c := Check{Source: fmt.Sprintf("%s/%s", org, repo), Line: line}
 	go func() {
-		defer wg.Done()
 		stats, resp, err := gh.Repositories.Get(context.Background(), org, repo)
 		if err != nil {
-			s := fmt.Sprintf("%d: just some weirdness with %s/%s, err: %q", line, org, repo, err)
-			fmt.Println(s)
-			to <- s
+			s := fmt.Sprintf("err: %q", err)
+			c.Message = s
+			to <- c
 			return
 		}
 		if resp.StatusCode == http.StatusOK {
 			if stats.PushedAt.AddDate(1, 0, 0).Before(time.Now()) {
-				s := fmt.Sprintf("%d: %s/%s is stale (last commit more than a year ago)", line, org, repo)
-				fmt.Println(s)
-				to <- s
+				s := "stale (last commit more than a year ago)"
+				c.Message = s
+				to <- c
 				return
 
 			}
-			s := fmt.Sprintf("%d: %s/%s ok", line, org, repo)
-			fmt.Println(s)
-			to <- s
+			c.Ok = true
+			to <- c
 		} else {
-			s := fmt.Sprintf("%d: got %d status for %s/%s", line, resp.StatusCode, org, repo)
-			fmt.Println(s)
-			to <- s
+			s := fmt.Sprintf("got status code %d", resp.StatusCode)
+			c.Message = s
+			to <- c
 		}
 	}()
 	select {
 	case res := <-to:
 		ch <- res
 	case <-time.After(5 * time.Second):
-		s := fmt.Sprintf("%d: timeout after 5 seconds for %s/%s", line, org, repo)
-		fmt.Println(s)
-		ch <- s
+		s := "timeout (5 seconds)"
+		c.Message = s
+		ch <- c
 	}
 }
 
-func CheckLink(line int, url string, ch chan<- string, cl *http.Client, wg *sync.WaitGroup) {
-	to := make(chan string, 1)
+func CheckLink(line int, url string, ch chan<- Check, cl *http.Client, wg *sync.WaitGroup) {
+	to := make(chan Check, 1)
+	defer wg.Done()
+	c := Check{Source: url, Line: line}
 	go func() {
-		defer wg.Done()
 		req, err := http.NewRequest(http.MethodGet, url, nil)
 		resp, err := cl.Do(req)
 		if err != nil {
-			s := fmt.Sprintf("%d: unable to resolve %s", line, url)
-			fmt.Println(s)
-			to <- s
+			s := "unable to resolve"
+			c.Message = s
+			to <- c
 			return
 		}
 		if resp.StatusCode != http.StatusOK {
-			s := fmt.Sprintf("%d: got status code %d for %s", line, resp.StatusCode, url)
-			fmt.Println(s)
-			to <- s
+			s := fmt.Sprintf("got status code %d", resp.StatusCode)
+			c.Message = s
+			to <- c
 			return
 		}
-		s := fmt.Sprintf("%d: %s returned %s", line, url, resp.Status)
-		fmt.Println(s)
-		to <- s
+		c.Ok = true
+		to <- c
 	}()
 	select {
 	case res := <-to:
 		ch <- res
 	case <-time.After(5 * time.Second):
 		s := fmt.Sprintf("%d: timeout after 5 seconds for %s", line, url)
-		fmt.Println(s)
-		ch <- s
+		c.Message = s
+		ch <- c
 
 	}
 }
@@ -149,7 +151,7 @@ func main() {
 	}
 
 	var wg sync.WaitGroup
-	ch := make(chan string, len(opq))
+	ch := make(chan Check, len(opq))
 	wg.Add(len(opq))
 
 	for _, l := range opq {
@@ -177,6 +179,8 @@ func main() {
 	wg.Wait()
 	close(ch)
 	for m := range ch {
-		fmt.Sprintf("%s", m)
+		if !m.Ok {
+			fmt.Println(fmt.Sprintf("%d: %s\n\t%s", m.Line, m.Source, m.Message))
+		}
 	}
 }
