@@ -1,0 +1,36 @@
+190: got status code 301 for http://namlook.github.com/mongokit/
+162: got status code 301 for http://massd.github.io/mongo
+222: got status code 302 for http://www.squeaksource.com/MongoTalk.html
+172: got status code 301 for http://mojolicio.us
+105: got status code 301 for http://gist.github.com/218388
+117: got status code 302 for http://blog.mongodb.com/post/18510469058/grails-in-the-land-of-mongodb
+41: got status code 303 for http://pub.dartlang.org/packages/mongo_dart
+50: got status code 301 for http://code.google.com/p/pebongo/
+34: got status code 301 for http://vibed.org/docs#mongo
+178: got status code 301 for http://mosh.codeplex.com
+83: got status code 301 for http://code.google.com/p/entity-language/wiki/mongodb
+141: got status code 301 for http://code.google.com/p/luamongo/
+9: got status code 301 for http://code.google.com/p/jmcnet-full-mongo-flex-driver/
+101: got status code 301 for http://bitbucket.org/liamstask/fantomongo/wiki/Home
+158: paulmelnikow/ObjCMongoDB is stale (last commit more than a year ago)
+152: gerald-lindsly/mongo-matlab-driver is stale (last commit more than a year ago)
+114: poiati/gmongo is stale (last commit more than a year ago)
+184: khueue/prolongo is stale (last commit more than a year ago)
+147: zbjornson/MongoDBLink is stale (last commit more than a year ago)
+120: saleram1/grails-bates is stale (last commit more than a year ago)
+156: timburks/NuMongoDB is stale (last commit more than a year ago)
+53: stijnsanders/TMongoWire is stale (last commit more than a year ago)
+137: fons/cl-mongo is stale (last commit more than a year ago)
+37: itiu/mongo-d-driver is stale (last commit more than a year ago)
+28: virtix/cfmongodb is stale (last commit more than a year ago)
+128: sergi/narwhal-mongodb is stale (last commit more than a year ago)
+15: algernon/libmongo-client is stale (last commit more than a year ago)
+196: jazzband/django-mongonaut is stale (last commit more than a year ago)
+143: moai/luamongo is stale (last commit more than a year ago)
+46: gerald-lindsly/mongo-delphi-driver is stale (last commit more than a year ago)
+93: slavapestov/factor is stale (last commit more than a year ago)
+133: RBXSystems/mongo-labview-driver is stale (last commit more than a year ago)
+19: marcesher/cfmongodb is stale (last commit more than a year ago)
+167: MLstate/opalang is stale (last commit more than a year ago)
+30: unable to resolve http://mongocfc.riaforge.org/
+218: unable to resolve http://planet.plt-scheme.org/display.ss?package=mongodb.plt&owner=jaymccarthy
