@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/go-github/github"
 	"golang.org/x/oauth2"
+	"golang.org/x/sync/errgroup"
 	"mvdan.cc/xurls/v2"
 )
 
@@ -23,6 +24,12 @@ type Check struct {
 	Source  string `json:"source"`
 	Message string `json:"message"`
 	Ok      bool   `json:"ok"`
+}
+
+type Link struct {
+	line int
+	url  string
+	file string
 }
 
 const (
@@ -37,10 +44,11 @@ func SplitOrgAndRepo(url string) []string {
 	return strings.Split(strings.TrimPrefix(url, GIT), "/")
 }
 
-func CheckGitHub(line int, org, repo string, ch chan<- Check, gh *github.Client, wg *sync.WaitGroup) {
+func CheckGitHub(l Link, org, repo string, ch chan<- Check, gh *github.Client, wg *sync.WaitGroup) {
 	to := make(chan Check, 1)
+	defer close(to)
 	defer wg.Done()
-	c := Check{Source: fmt.Sprintf("%s/%s", org, repo), Line: line}
+	c := Check{Source: fmt.Sprintf("%s/%s", org, repo), Line: l.line, File: l.file}
 	go func() {
 		stats, resp, err := gh.Repositories.Get(context.Background(), org, repo)
 		if err != nil {
@@ -75,12 +83,13 @@ func CheckGitHub(line int, org, repo string, ch chan<- Check, gh *github.Client,
 	}
 }
 
-func CheckLink(line int, url string, ch chan<- Check, cl *http.Client, wg *sync.WaitGroup) {
+func CheckLink(l Link, ch chan<- Check, cl *http.Client, wg *sync.WaitGroup) {
 	to := make(chan Check, 1)
+	defer close(to)
 	defer wg.Done()
-	c := Check{Source: url, Line: line}
+	c := Check{Source: l.url, Line: l.line, File: l.file}
 	go func() {
-		req, err := http.NewRequest(http.MethodGet, url, nil)
+		req, err := http.NewRequest(http.MethodGet, l.url, nil)
 		resp, err := cl.Do(req)
 		if err != nil {
 			s := "unable to resolve"
@@ -101,7 +110,7 @@ func CheckLink(line int, url string, ch chan<- Check, cl *http.Client, wg *sync.
 	case res := <-to:
 		ch <- res
 	case <-time.After(5 * time.Second):
-		s := fmt.Sprintf("%d: timeout after 5 seconds for %s", line, url)
+		s := "timeout after 5 seconds"
 		c.Message = s
 		ch <- c
 
@@ -110,7 +119,10 @@ func CheckLink(line int, url string, ch chan<- Check, cl *http.Client, wg *sync.
 
 func main() {
 
-	ctx := context.Background()
+	currDir, _ := os.Getwd()
+
+	ctx, cf := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cf()
 	ts := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: os.Getenv("GIT_REPO_TOKEN")},
 	)
@@ -121,91 +133,130 @@ func main() {
 			return http.ErrUseLastResponse
 		},
 	}
-	currDir, _ := os.Getwd()
-	rxStrict := xurls.Strict()
-	var wg sync.WaitGroup
-	all := make([]<-chan Check, 16)
-	err := filepath.Walk(".",
-		func(path string, f os.FileInfo, err error) error {
+	paths, err := search(ctx, currDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	res := checkUrls(ctx, paths, gh, cl)
+	for c := range res {
+		fmt.Println(c.File, c.Line, c.Ok)
+	}
 
-			var lg sync.WaitGroup
+}
+
+func checkUrls(ctx context.Context, paths chan string, gh *github.Client, cl *http.Client) <-chan Check {
+	g, ctx := errgroup.WithContext(ctx)
+	rxStrict := xurls.Strict()
+	c := make(chan string, 1000)
+	for path := range paths {
+		p := path
+		g.Go(func() error {
+
+			select {
+			case c <- p:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			return nil
+		})
+	}
+	go func() {
+		g.Wait()
+		close(c)
+	}()
+
+	checks := make(chan Check, 1000)
+
+	for file := range c {
+		fName := file
+		g.Go(func() error {
+			var wg sync.WaitGroup
 			var ch chan Check
+			file, err := os.Open(fName)
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer file.Close()
+
+			scanner := bufio.NewScanner(file)
+			i := 1
+
+			opq := make([]Link, 0)
+
+			for scanner.Scan() {
+				res := rxStrict.FindAllString(scanner.Text(), -1)
+				if len(res) > 0 {
+					for _, v := range res {
+						opq = append(opq, Link{line: i, url: v, file: fName})
+
+					}
+				}
+				i++
+			}
+
+			ch = make(chan Check, len(opq))
+			wg.Add(len(opq))
+
+			for _, l := range opq {
+				if strings.HasPrefix(l.url, TLSGIT) {
+					go func(l Link) {
+						info := SplitOrgAndRepo(l.url)
+						CheckGitHub(l, info[0], info[1], ch, gh, &wg)
+					}(l)
+				} else if strings.HasPrefix(l.url, GIT) {
+					go func(l Link) {
+						info := SplitOrgAndRepo(l.url)
+						CheckGitHub(l, info[0], info[1], ch, gh, &wg)
+					}(l)
+				} else {
+					go func(l Link) {
+						CheckLink(l, ch, cl, &wg)
+					}(l)
+				}
+			}
+
+			if err := scanner.Err(); err != nil {
+				log.Fatal(err)
+			}
+			wg.Wait()
+			close(ch)
+			for m := range ch {
+				checks <- m
+			}
+			return nil
+		})
+	}
+	return checks
+}
+
+func search(ctx context.Context, root string) (chan string, error) {
+	g, ctx := errgroup.WithContext(ctx)
+	paths := make(chan string, 1000)
+	// get all the paths
+
+	g.Go(func() error {
+		defer close(paths)
+
+		return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
-			if f.IsDir() && f.Name() == ".git" {
-				return filepath.SkipDir
+			if !info.Mode().IsRegular() {
+				return nil
 			}
-			if filepath.Ext(path) == ".rst" || filepath.Ext(path) == ".txt" {
-				wg.Add(1)
-				defer wg.Done()
-				fName := fmt.Sprintf("%s/%s", currDir, path)
-				file, err := os.Open(fName)
-				if err != nil {
-					log.Fatal(err)
-				}
-				defer file.Close()
-
-				scanner := bufio.NewScanner(file)
-				i := 1
-
-				type Link struct {
-					line int
-					url  string
-				}
-				opq := make([]Link, 0)
-
-				for scanner.Scan() {
-					res := rxStrict.FindAllString(scanner.Text(), -1)
-					if len(res) > 0 {
-						for _, v := range res {
-							opq = append(opq, Link{line: i, url: v})
-
-						}
-					}
-					i++
-				}
-
-				ch = make(chan Check, len(opq))
-				lg.Add(len(opq))
-
-				for _, l := range opq {
-					if strings.HasPrefix(l.url, TLSGIT) {
-						go func(i int, v string, gh *github.Client) {
-							info := SplitOrgAndRepo(v)
-							CheckGitHub(i, info[0], info[1], ch, gh, &lg)
-						}(l.line, l.url, gh)
-					} else if strings.HasPrefix(l.url, GIT) {
-						go func(i int, v string, gh *github.Client) {
-							info := SplitOrgAndRepo(v)
-							CheckGitHub(i, info[0], info[1], ch, gh, &lg)
-						}(l.line, l.url, gh)
-					} else {
-						go func(i int, v string, cl *http.Client) {
-							CheckLink(i, v, ch, cl, &lg)
-						}(l.line, l.url, cl)
-					}
-				}
-
-				if err := scanner.Err(); err != nil {
-					log.Fatal(err)
-				}
+			if !info.IsDir() && (!strings.HasSuffix(info.Name(), ".rst") || !strings.HasSuffix(info.Name(), ".txt")) {
+				return nil
 			}
-			lg.Wait()
-			close(ch)
-			all = append(all, ch)
+
+			select {
+			case paths <- path:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 			return nil
 		})
-	if err != nil {
-		log.Println(err)
-	}
+	})
 
-	wg.Wait()
-	for _, ca := range all {
-		for m := range ca {
-			if !m.Ok {
-				fmt.Println(fmt.Sprintf("%d: %s\n\t%s", m.Line, m.Source, m.Message))
-			}
-		}
-	}
+	return paths, g.Wait()
+
 }
