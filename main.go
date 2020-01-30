@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 )
 
 type Check struct {
+	File    string `json:"file"`
 	Line    int    `json:"line"`
 	Source  string `json:"source"`
 	Message string `json:"message"`
@@ -107,6 +109,7 @@ func CheckLink(line int, url string, ch chan<- Check, cl *http.Client, wg *sync.
 }
 
 func main() {
+
 	ctx := context.Background()
 	ts := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: os.Getenv("GIT_REPO_TOKEN")},
@@ -118,69 +121,91 @@ func main() {
 			return http.ErrUseLastResponse
 		},
 	}
-
 	currDir, _ := os.Getwd()
-	fName := fmt.Sprintf("%s/../%s", currDir, "docs-ecosystem/source/drivers/community-supported-drivers.txt")
-	fmt.Println(fName)
-	file, err := os.Open(fName)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer file.Close()
-
 	rxStrict := xurls.Strict()
-
-	scanner := bufio.NewScanner(file)
-	i := 1
-
-	type Link struct {
-		line int
-		url  string
-	}
-	opq := make([]Link, 0)
-
-	for scanner.Scan() {
-		res := rxStrict.FindAllString(scanner.Text(), -1)
-		if len(res) > 0 {
-			for _, v := range res {
-				opq = append(opq, Link{line: i, url: v})
-
-			}
-		}
-		i++
-	}
-
 	var wg sync.WaitGroup
-	ch := make(chan Check, len(opq))
-	wg.Add(len(opq))
+	all := make([]<-chan Check, 16)
+	err := filepath.Walk(".",
+		func(path string, f os.FileInfo, err error) error {
 
-	for _, l := range opq {
-		if strings.HasPrefix(l.url, TLSGIT) {
-			go func(i int, v string, gh *github.Client) {
-				info := SplitOrgAndRepo(v)
-				CheckGitHub(i, info[0], info[1], ch, gh, &wg)
-			}(l.line, l.url, gh)
-		} else if strings.HasPrefix(l.url, GIT) {
-			go func(i int, v string, gh *github.Client) {
-				info := SplitOrgAndRepo(v)
-				CheckGitHub(i, info[0], info[1], ch, gh, &wg)
-			}(l.line, l.url, gh)
-		} else {
-			go func(i int, v string, cl *http.Client) {
-				CheckLink(i, v, ch, cl, &wg)
-			}(l.line, l.url, cl)
-		}
-	}
+			var lg sync.WaitGroup
+			var ch chan Check
+			if err != nil {
+				return err
+			}
+			if f.IsDir() && f.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			if filepath.Ext(path) == ".rst" || filepath.Ext(path) == ".txt" {
+				wg.Add(1)
+				defer wg.Done()
+				fName := fmt.Sprintf("%s/%s", currDir, path)
+				file, err := os.Open(fName)
+				if err != nil {
+					log.Fatal(err)
+				}
+				defer file.Close()
 
-	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
+				scanner := bufio.NewScanner(file)
+				i := 1
+
+				type Link struct {
+					line int
+					url  string
+				}
+				opq := make([]Link, 0)
+
+				for scanner.Scan() {
+					res := rxStrict.FindAllString(scanner.Text(), -1)
+					if len(res) > 0 {
+						for _, v := range res {
+							opq = append(opq, Link{line: i, url: v})
+
+						}
+					}
+					i++
+				}
+
+				ch = make(chan Check, len(opq))
+				lg.Add(len(opq))
+
+				for _, l := range opq {
+					if strings.HasPrefix(l.url, TLSGIT) {
+						go func(i int, v string, gh *github.Client) {
+							info := SplitOrgAndRepo(v)
+							CheckGitHub(i, info[0], info[1], ch, gh, &lg)
+						}(l.line, l.url, gh)
+					} else if strings.HasPrefix(l.url, GIT) {
+						go func(i int, v string, gh *github.Client) {
+							info := SplitOrgAndRepo(v)
+							CheckGitHub(i, info[0], info[1], ch, gh, &lg)
+						}(l.line, l.url, gh)
+					} else {
+						go func(i int, v string, cl *http.Client) {
+							CheckLink(i, v, ch, cl, &lg)
+						}(l.line, l.url, cl)
+					}
+				}
+
+				if err := scanner.Err(); err != nil {
+					log.Fatal(err)
+				}
+			}
+			lg.Wait()
+			close(ch)
+			all = append(all, ch)
+			return nil
+		})
+	if err != nil {
+		log.Println(err)
 	}
 
 	wg.Wait()
-	close(ch)
-	for m := range ch {
-		if !m.Ok {
-			fmt.Println(fmt.Sprintf("%d: %s\n\t%s", m.Line, m.Source, m.Message))
+	for _, ca := range all {
+		for m := range ca {
+			if !m.Ok {
+				fmt.Println(fmt.Sprintf("%d: %s\n\t%s", m.Line, m.Source, m.Message))
+			}
 		}
 	}
 }
