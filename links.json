@@ -1,0 +1,30 @@
+{
+  "stdin": {
+    "line warnings": {
+      "2": {
+        "url": "https://docs.mongodb.com/ecosystem",
+        "message": "got status code 302"
+      },
+      "3": {
+        "url": "https://docs.mongodb.com/ecosystem/drivers",
+        "message": "got status code 302"
+      },
+      "4": {
+        "url": "https://docs.mongodb.com/stitch",
+        "message": "got status code 302"
+      },
+      "5": {
+        "url": "https://docs.mongodb.com/guides",
+        "message": "got status code 302"
+      },
+      "6": {
+        "url": "https://docs.mongodb.com/atlas-open-service-broker",
+        "message": "got status code 302"
+      },
+      "8": {
+        "url": "https://docs.mongodb.com/charts/saas",
+        "message": "got status code 302"
+      }
+    }
+  }
+}
